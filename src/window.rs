@@ -1,11 +1,13 @@
 use std::iter;
-
+use std::time::Instant;
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
+const GRAVITY: f32 = 9.81;
+
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -28,16 +30,42 @@ impl Vertex {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x3,
-                }
-            ]
+                },
+            ],
         }
+    }
+}
+struct PhysicalState {
+    pub position: [f32; 3],
+    pub rotation: [f32; 3],
+    pub scale: f32,
+    pub velocity: [f32; 3],
+}
+impl PhysicalState {
+    fn new(position: [f32; 3]) -> PhysicalState {
+        PhysicalState {
+            position,
+            rotation: [0.0; 3],
+            scale: 1.0,
+            velocity: [0.0; 3],
+        }
+    }
+    fn create_transformation_matrix(&self) -> cgmath::Matrix4<f32> {
+        let position_matrix =
+            cgmath::Matrix4::from_translation(cgmath::Vector3::from(self.position));
+        //let rotation_matrix =
+        //cgmath::Matrix4::from_euler_angles(self.rotation[0], self.rotation[1], self.rotation[2]);
+        //let scale_matrix = cgmath::Matrix4::from_scale(self.scale);
+
+        let transformation_matrix = position_matrix;
+
+        transformation_matrix.into()
     }
 }
 struct Floor {
     position: [f32; 3],
     size: f32,
 }
-
 impl Floor {
     fn new(size: f32) -> Floor {
         Floor {
@@ -53,54 +81,49 @@ impl Floor {
         let half_size = self.size / 2.0;
         let half_thickness = self.size * 0.005;
         [
-        [-half_size, -half_thickness, -half_size],
-        [half_size, -half_thickness, -half_size],
-        [-half_size, half_thickness, -half_size],
-        [-half_size, half_thickness, -half_size],
-        [half_size, -half_thickness, -half_size],
-        [half_size, half_thickness, -half_size],
-
-        // Right face
-        [half_size, -half_thickness, -half_size],
-        [half_size, -half_thickness, half_size],
-        [half_size, half_thickness, -half_size],
-        [half_size, half_thickness, -half_size],
-        [half_size, -half_thickness, half_size],
-        [half_size, half_thickness, half_size],
-
-        // Back face
-        [half_size, -half_thickness, half_size],
-        [-half_size, -half_thickness, half_size],
-        [half_size, half_thickness, half_size],
-        [half_size, half_thickness, half_size],
-        [-half_size, -half_thickness, half_size],
-        [-half_size, half_thickness, half_size],
-
-        // Left face
-        [-half_size, -half_thickness, half_size],
-        [-half_size, -half_thickness, -half_size],
-        [-half_size, half_thickness, half_size],
-        [-half_size, half_thickness, half_size],
-        [-half_size, -half_thickness, -half_size],
-        [-half_size, half_thickness, -half_size],
-
-        // Top face
-        [-half_size, half_thickness, half_size],
-        [half_size, half_thickness, half_size],
-        [-half_size, half_thickness, -half_size],
-        [-half_size, half_thickness, -half_size],
-        [half_size, half_thickness, half_size],
-        [half_size, half_thickness, -half_size],
-
-        // Bottom face
-        [-half_size, -half_thickness, half_size],
-        [half_size, -half_thickness, half_size],
-        [-half_size, -half_thickness, -half_size],
-        [-half_size, -half_thickness, -half_size],
-        [half_size, -half_thickness, half_size],
-        [half_size, -half_thickness, -half_size],
-    ].to_vec()
-
+            [-half_size, -half_thickness, -half_size],
+            [half_size, -half_thickness, -half_size],
+            [-half_size, half_thickness, -half_size],
+            [-half_size, half_thickness, -half_size],
+            [half_size, -half_thickness, -half_size],
+            [half_size, half_thickness, -half_size],
+            // Right face
+            [half_size, -half_thickness, -half_size],
+            [half_size, -half_thickness, half_size],
+            [half_size, half_thickness, -half_size],
+            [half_size, half_thickness, -half_size],
+            [half_size, -half_thickness, half_size],
+            [half_size, half_thickness, half_size],
+            // Back face
+            [half_size, -half_thickness, half_size],
+            [-half_size, -half_thickness, half_size],
+            [half_size, half_thickness, half_size],
+            [half_size, half_thickness, half_size],
+            [-half_size, -half_thickness, half_size],
+            [-half_size, half_thickness, half_size],
+            // Left face
+            [-half_size, -half_thickness, half_size],
+            [-half_size, -half_thickness, -half_size],
+            [-half_size, half_thickness, half_size],
+            [-half_size, half_thickness, half_size],
+            [-half_size, -half_thickness, -half_size],
+            [-half_size, half_thickness, -half_size],
+            // Top face
+            [-half_size, half_thickness, half_size],
+            [half_size, half_thickness, half_size],
+            [-half_size, half_thickness, -half_size],
+            [-half_size, half_thickness, -half_size],
+            [half_size, half_thickness, half_size],
+            [half_size, half_thickness, -half_size],
+            // Bottom face
+            [-half_size, -half_thickness, half_size],
+            [half_size, -half_thickness, half_size],
+            [-half_size, -half_thickness, -half_size],
+            [-half_size, -half_thickness, -half_size],
+            [half_size, -half_thickness, half_size],
+            [half_size, -half_thickness, -half_size],
+        ]
+        .to_vec()
     }
     fn floor_colors(&self) -> Vec<[i8; 3]> {
         [
@@ -140,8 +163,8 @@ impl Floor {
             [1, 1, 1],
             [1, 1, 1],
             [1, 1, 1],
-
-        ].to_vec()
+        ]
+        .to_vec()
     }
     fn vertex(&self, p: [f32; 3], c: [i8; 3]) -> Vertex {
         Vertex {
@@ -152,7 +175,7 @@ impl Floor {
     fn create_vertices(&self) -> Vec<Vertex> {
         let pos = self.floor_positions();
         let col = self.floor_colors();
-        let mut data:Vec<Vertex> = Vec::with_capacity(pos.len());
+        let mut data: Vec<Vertex> = Vec::with_capacity(pos.len());
         for i in 0..pos.len() {
             data.push(self.vertex(pos[i], col[i]));
         }
@@ -162,12 +185,14 @@ impl Floor {
 struct Cube {
     position: [f32; 3],
     size: f32,
+    physical_state: PhysicalState,
 }
 impl Cube {
     fn new(position: [f32; 3], size: f32) -> Self {
         Self {
             position,
             size,
+            physical_state: PhysicalState::new(position),
         }
     }
     fn cube_positions(&self) -> Vec<[f32; 3]> {
@@ -182,7 +207,6 @@ impl Cube {
             [x - half_size, y + half_size, z + half_size],
             [x + half_size, y - half_size, z + half_size],
             [x + half_size, y + half_size, z + half_size],
-        
             // right (1, 0, 0)
             [x + half_size, y - half_size, z + half_size],
             [x + half_size, y - half_size, z - half_size],
@@ -190,7 +214,6 @@ impl Cube {
             [x + half_size, y + half_size, z + half_size],
             [x + half_size, y - half_size, z - half_size],
             [x + half_size, y + half_size, z - half_size],
-        
             // back (0, 0, -1)
             [x + half_size, y - half_size, z - half_size],
             [x - half_size, y - half_size, z - half_size],
@@ -198,7 +221,6 @@ impl Cube {
             [x + half_size, y + half_size, z - half_size],
             [x - half_size, y - half_size, z - half_size],
             [x - half_size, y + half_size, z - half_size],
-        
             // left (-1, 0, 0)
             [x - half_size, y - half_size, z - half_size],
             [x - half_size, y - half_size, z + half_size],
@@ -206,8 +228,6 @@ impl Cube {
             [x - half_size, y + half_size, z - half_size],
             [x - half_size, y - half_size, z + half_size],
             [x - half_size, y + half_size, z + half_size],
-
-
             [x - half_size, y + half_size, z + half_size],
             [x + half_size, y + half_size, z + half_size],
             [x - half_size, y + half_size, z - half_size],
@@ -221,28 +241,55 @@ impl Cube {
             [x - half_size, y - half_size, z + half_size],
             [x + half_size, y - half_size, z - half_size],
             [x + half_size, y - half_size, z + half_size],
-        ].to_vec()
+        ]
+        .to_vec()
     }
     fn cube_colors(&self) -> Vec<[i8; 3]> {
         [
             // front - blue
-            [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1],
-    
+            [0, 0, 1],
+            [0, 0, 1],
+            [0, 0, 1],
+            [0, 0, 1],
+            [0, 0, 1],
+            [0, 0, 1],
             // right - red
-            [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0],
-    
-            // back - yellow           
-            [1, 1, 0], [1, 1, 0], [1, 1, 0], [1, 1, 0], [1, 1, 0], [1, 1, 0],
-    
+            [1, 0, 0],
+            [1, 0, 0],
+            [1, 0, 0],
+            [1, 0, 0],
+            [1, 0, 0],
+            [1, 0, 0],
+            // back - yellow
+            [1, 1, 0],
+            [1, 1, 0],
+            [1, 1, 0],
+            [1, 1, 0],
+            [1, 1, 0],
+            [1, 1, 0],
             // left - aqua
-            [0, 1, 1], [0, 1, 1], [0, 1, 1], [0, 1, 1], [0, 1, 1], [0, 1, 1],
-    
+            [0, 1, 1],
+            [0, 1, 1],
+            [0, 1, 1],
+            [0, 1, 1],
+            [0, 1, 1],
+            [0, 1, 1],
             // top - green
-            [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0],
-    
+            [0, 1, 0],
+            [0, 1, 0],
+            [0, 1, 0],
+            [0, 1, 0],
+            [0, 1, 0],
+            [0, 1, 0],
             // bottom - fuchsia
-            [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1],
-        ].to_vec()
+            [1, 0, 1],
+            [1, 0, 1],
+            [1, 0, 1],
+            [1, 0, 1],
+            [1, 0, 1],
+            [1, 0, 1],
+        ]
+        .to_vec()
     }
     fn vertex(&self, p: [f32; 3], c: [i8; 3]) -> Vertex {
         Vertex {
@@ -253,20 +300,25 @@ impl Cube {
     fn create_vertices(&self) -> Vec<Vertex> {
         let pos = self.cube_positions();
         let col = self.cube_colors();
-        let mut data:Vec<Vertex> = Vec::with_capacity(pos.len());
+        let mut data: Vec<Vertex> = Vec::with_capacity(pos.len());
         for i in 0..pos.len() {
             data.push(self.vertex(pos[i], col[i]));
         }
         data.to_vec()
     }
+    fn update(&mut self, dt: std::time::Duration) {
+        self.physical_state.velocity[1] = 1.0;
+        if (self.physical_state.position[1] + self.size) >= 0.0 {
+            self.physical_state.velocity[1] += GRAVITY * dt.as_secs_f32();
+            self.physical_state.position[1] -= self.physical_state.velocity[1] * dt.as_secs_f32();
+        }
+        self.physical_state.position[0] += self.physical_state.velocity[0] * dt.as_secs_f32();
+        self.physical_state.position[2] += self.physical_state.velocity[2] * dt.as_secs_f32();
+    }
 }
 
 //indices enable to reuse data of vertex (triangles that use the same vertices for example)
-const INDICES: &[u16] = &[
-    0, 1, 4,
-    1, 2, 4,
-    2, 3, 4,
-];
+const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
 #[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
@@ -297,11 +349,12 @@ impl CameraController {
     fn process_events(&mut self, event: &WindowEvent) -> bool {
         match event {
             WindowEvent::KeyboardInput {
-                input: KeyboardInput {
-                    state,
-                    virtual_keycode: Some(keycode),
-                    ..
-                },
+                input:
+                    KeyboardInput {
+                        state,
+                        virtual_keycode: Some(keycode),
+                        ..
+                    },
                 ..
             } => {
                 let is_pressed = *state == ElementState::Pressed;
@@ -351,8 +404,8 @@ impl CameraController {
         let forward_mag = forward.magnitude();
 
         if self.is_right_pressed {
-            // Rescale the distance between the target and eye so 
-            // that it doesn't change. The eye therefore still 
+            // Rescale the distance between the target and eye so
+            // that it doesn't change. The eye therefore still
             // lies on the circle made by the target and eye.
             camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
         }
@@ -403,7 +456,25 @@ impl CameraUniform {
         self.view_proj = camera.build_view_projection_matrix().into();
     }
 }
+#[repr(C)]
+// This is so we can store this in a buffer
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct TransformUniform {
+    transform_matrix: [[f32; 4]; 4],
+}
 
+impl TransformUniform {
+    fn new() -> Self {
+        use cgmath::SquareMatrix;
+        Self {
+            transform_matrix: cgmath::Matrix4::identity().into(),
+        }
+    }
+
+    fn update_transform_matrix(&mut self, cube: &Cube) {
+        self.transform_matrix = cube.physical_state.create_transformation_matrix().into();
+    }
+}
 struct State {
     surface: wgpu::Surface,
     device: wgpu::Device,
@@ -420,6 +491,11 @@ struct State {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    floor: Floor,
+    objects: Vec<Cube>,
+    transform_uniform: TransformUniform, //used to make matrix into valid type -> uniform it
+    transform_buffer: wgpu::Buffer,
+    transform_bind_group: wgpu::BindGroup,
 }
 
 impl State {
@@ -501,16 +577,14 @@ impl State {
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.update_view_proj(&camera);
 
-        let camera_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Camera Buffer"),
-                contents: bytemuck::cast_slice(&[camera_uniform]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Camera Buffer"),
+            contents: bytemuck::cast_slice(&[camera_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
@@ -519,43 +593,49 @@ impl State {
                         min_binding_size: None,
                     },
                     count: None,
-                }
-            ],
-            label: Some("camera_bind_group_layout"),
-        });
+                }],
+                label: Some("camera_bind_group_layout"),
+            });
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &camera_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                }
-            ],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
             label: Some("camera_bind_group"),
         });
+        let transform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX, // The transformation matrix will be used in the vertex shader
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+                label: Some("transform_bind_group_layout"),
+            });
+
         let camera_controller = CameraController::new(0.05);
-        
+
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-        let render_pipeline_layout = device.create_pipeline_layout(
-            &wgpu::PipelineLayoutDescriptor {
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[
-                    &camera_bind_group_layout,
-                ],
+                bind_group_layouts: &[&camera_bind_group_layout, &transform_bind_group_layout],
                 push_constant_ranges: &[],
-            }
-        );
-        
-        
+            });
+
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main", // 1.
-                buffers: &[
-                    Vertex::desc(),
-                ],           // 2.
+                entry_point: "vs_main",     // 1.
+                buffers: &[Vertex::desc()], // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
@@ -588,23 +668,42 @@ impl State {
             },
             multiview: None, // 5.
         });
-        let cube = Cube::new([0.0, 5.0, 0.0], 1.0);
+        let mut objects: Vec<Cube> = Vec::new();
+        let cube = Cube::new([0.0, 10.0, 0.0], 1.0);
+        objects.push(cube);
+
         let floor = Floor::new(10.0);
-        let concatenated_vertices = [floor.create_vertices(), cube.create_vertices()].concat();
-        let vertex_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&concatenated_vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        );
-        let index_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(INDICES),
-                usage: wgpu::BufferUsages::INDEX,
-            }
-        );
+
+        let concatenated_vertices =
+            [floor.create_vertices(), objects[0].create_vertices()].concat();
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&concatenated_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let mut transform_uniform = TransformUniform::new();
+        transform_uniform.update_transform_matrix(&objects[0]);
+
+        let transform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Transform Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[transform_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        // Create the bind group
+        let transform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &transform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 1,
+                resource: transform_buffer.as_entire_binding(),
+            }],
+            label: Some("transform_bind_group"),
+        });
         let num_indices = INDICES.len() as u32;
         Self {
             surface,
@@ -622,6 +721,11 @@ impl State {
             vertex_buffer,
             index_buffer,
             num_indices,
+            floor,
+            objects,
+            transform_uniform,
+            transform_buffer,
+            transform_bind_group,
         }
     }
 
@@ -643,10 +747,36 @@ impl State {
         self.camera_controller.process_events(event)
     }
 
-    fn update(&mut self) {
+    fn update(&mut self, dt: std::time::Duration) {
+        // physic logic
+        //self.objects[0].update(dt);
+        self.objects[0].update(dt);
+        print!("{}", self.objects[0].physical_state.position[1]);
+        println!("new object");
+        self.transform_uniform
+            .update_transform_matrix(&self.objects[0]);
+        // camera
+        for i in 0..4 {
+            for j in 0..4 {
+                print!("{}, ", self.transform_uniform.transform_matrix[i][j]);
+            }
+            println!();
+        }
+        println!("new matrix");
+
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
-        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
+        self.queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
+
+        self.queue.write_buffer(
+            &self.transform_buffer,
+            0,
+            bytemuck::cast_slice(&[self.transform_uniform]),
+        );
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -680,12 +810,13 @@ impl State {
                 depth_stencil_attachment: None,
             });
             render_pass.set_pipeline(&self.render_pipeline); // 2.
-            // NEW!
+                                                             // NEW!
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.transform_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             //render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
-            render_pass.draw(0..{36+36}, 0..1);
+            render_pass.draw(0..{ 36 + 36 }, 0..1);
         }
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
@@ -700,7 +831,7 @@ pub async fn run() {
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = State::new(window).await;
-
+    let mut last_render_time = Instant::now();
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::WindowEvent {
@@ -732,7 +863,10 @@ pub async fn run() {
                 }
             }
             Event::RedrawRequested(window_id) if window_id == state.window().id() => {
-                state.update();
+                let now = Instant::now();
+                let dt = now - last_render_time;
+                last_render_time = now;
+                state.update(dt);
                 match state.render() {
                     Ok(_) => {}
                     // Reconfigure the surface if it's lost or outdated
