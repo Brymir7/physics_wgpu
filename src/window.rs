@@ -33,12 +33,132 @@ impl Vertex {
         }
     }
 }
+struct Floor {
+    position: [f32; 3],
+    size: f32,
+}
 
-// lib.rs
-const VERTICES: &[Vertex] = &[
+impl Floor {
+    fn new(size: f32) -> Floor {
+        Floor {
+            position: [0.0, 0.0, 0.0],
+            size,
+        }
+    }
+    fn floor_positions(&self) -> Vec<[f32; 3]> {
+        let x = self.position[0];
+        let y = self.position[1];
+        let z = self.position[2];
 
-];
+        let half_size = self.size / 2.0;
+        let half_thickness = self.size * 0.005;
+        [
+        [-half_size, -half_thickness, -half_size],
+        [half_size, -half_thickness, -half_size],
+        [-half_size, half_thickness, -half_size],
+        [-half_size, half_thickness, -half_size],
+        [half_size, -half_thickness, -half_size],
+        [half_size, half_thickness, -half_size],
 
+        // Right face
+        [half_size, -half_thickness, -half_size],
+        [half_size, -half_thickness, half_size],
+        [half_size, half_thickness, -half_size],
+        [half_size, half_thickness, -half_size],
+        [half_size, -half_thickness, half_size],
+        [half_size, half_thickness, half_size],
+
+        // Back face
+        [half_size, -half_thickness, half_size],
+        [-half_size, -half_thickness, half_size],
+        [half_size, half_thickness, half_size],
+        [half_size, half_thickness, half_size],
+        [-half_size, -half_thickness, half_size],
+        [-half_size, half_thickness, half_size],
+
+        // Left face
+        [-half_size, -half_thickness, half_size],
+        [-half_size, -half_thickness, -half_size],
+        [-half_size, half_thickness, half_size],
+        [-half_size, half_thickness, half_size],
+        [-half_size, -half_thickness, -half_size],
+        [-half_size, half_thickness, -half_size],
+
+        // Top face
+        [-half_size, half_thickness, half_size],
+        [half_size, half_thickness, half_size],
+        [-half_size, half_thickness, -half_size],
+        [-half_size, half_thickness, -half_size],
+        [half_size, half_thickness, half_size],
+        [half_size, half_thickness, -half_size],
+
+        // Bottom face
+        [-half_size, -half_thickness, half_size],
+        [half_size, -half_thickness, half_size],
+        [-half_size, -half_thickness, -half_size],
+        [-half_size, -half_thickness, -half_size],
+        [half_size, -half_thickness, half_size],
+        [half_size, -half_thickness, -half_size],
+    ].to_vec()
+
+    }
+    fn floor_colors(&self) -> Vec<[i8; 3]> {
+        [
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+
+        ].to_vec()
+    }
+    fn vertex(&self, p: [f32; 3], c: [i8; 3]) -> Vertex {
+        Vertex {
+            position: [p[0] as f32, p[1] as f32, p[2] as f32],
+            color: [c[0] as f32, c[1] as f32, c[2] as f32],
+        }
+    }
+    fn create_vertices(&self) -> Vec<Vertex> {
+        let pos = self.floor_positions();
+        let col = self.floor_colors();
+        let mut data:Vec<Vertex> = Vec::with_capacity(pos.len());
+        for i in 0..pos.len() {
+            data.push(self.vertex(pos[i], col[i]));
+        }
+        data.to_vec()
+    }
+}
 struct Cube {
     position: [f32; 3],
     size: f32,
@@ -50,64 +170,97 @@ impl Cube {
             size,
         }
     }
-    fn vertices(&self) -> [Vertex; 36] {
+    fn cube_positions(&self) -> Vec<[f32; 3]> {
         let x = self.position[0];
         let y = self.position[1];
         let z = self.position[2];
-        let size = self.size;
+        let half_size = self.size / 2.0;
+        [
+            [x - half_size, y - half_size, z + half_size],
+            [x + half_size, y - half_size, z + half_size],
+            [x - half_size, y + half_size, z + half_size],
+            [x - half_size, y + half_size, z + half_size],
+            [x + half_size, y - half_size, z + half_size],
+            [x + half_size, y + half_size, z + half_size],
+        
+            // right (1, 0, 0)
+            [x + half_size, y - half_size, z + half_size],
+            [x + half_size, y - half_size, z - half_size],
+            [x + half_size, y + half_size, z + half_size],
+            [x + half_size, y + half_size, z + half_size],
+            [x + half_size, y - half_size, z - half_size],
+            [x + half_size, y + half_size, z - half_size],
+        
+            // back (0, 0, -1)
+            [x + half_size, y - half_size, z - half_size],
+            [x - half_size, y - half_size, z - half_size],
+            [x + half_size, y + half_size, z - half_size],
+            [x + half_size, y + half_size, z - half_size],
+            [x - half_size, y - half_size, z - half_size],
+            [x - half_size, y + half_size, z - half_size],
+        
+            // left (-1, 0, 0)
+            [x - half_size, y - half_size, z - half_size],
+            [x - half_size, y - half_size, z + half_size],
+            [x - half_size, y + half_size, z - half_size],
+            [x - half_size, y + half_size, z - half_size],
+            [x - half_size, y - half_size, z + half_size],
+            [x - half_size, y + half_size, z + half_size],
 
-        // Define the vertices for each face of the cube
-        let front_vertices = [  
-            Vertex { position: [x - size, y - size, z + size], color: [1.0, 0.0, 0.0] }, // A
-            Vertex { position: [x + size, y - size, z + size], color: [1.0, 0.0, 0.0] }, // B
-            Vertex { position: [x + size, y + size, z + size], color: [1.0, 0.0, 0.0] }, // C
-            Vertex { position: [x - size, y + size, z + size], color: [1.0, 0.0, 0.0] }, // D
-        ];
-        let back_vertices = [           
-            Vertex { position: [x - size, y - size, z - size], color: [0.0, 1.0, 0.0] }, // E
-            Vertex { position: [x - size, y + size, z - size], color: [0.0, 1.0, 0.0] }, // F
-            Vertex { position: [x + size, y + size, z - size], color: [0.0, 1.0, 0.0] }, // G
-            Vertex { position: [x + size, y - size, z - size], color: [0.0, 1.0, 0.0] }, // H
-        ];
-        let top_vertices = [            
-            Vertex { position: [x - size, y + size, z + size], color: [0.0, 0.0, 1.0] }, // D
-            Vertex { position: [x + size, y + size, z + size], color: [0.0, 0.0, 1.0] }, // C
-            Vertex { position: [x + size, y + size, z - size], color: [0.0, 0.0, 1.0] }, // G
-            Vertex { position: [x - size, y + size, z - size], color: [0.0, 0.0, 1.0] }, // F
-        ];
-        let bottom_vertices = [            
-            Vertex { position: [x - size, y - size, z + size], color: [1.0, 1.0, 0.0] }, // A
-            Vertex { position: [x - size, y - size, z - size], color: [1.0, 1.0, 0.0] }, // E
-            Vertex { position: [x + size, y - size, z - size], color: [1.0, 1.0, 0.0] }, // H
-            Vertex { position: [x + size, y - size, z + size], color: [1.0, 1.0, 0.0] }, // B
-        ];
-        let left_vertices = [
-            Vertex { position: [x - size, y - size, z + size], color: [0.0, 1.0, 1.0] }, // A
-            Vertex { position: [x - size, y + size, z + size], color: [0.0, 1.0, 1.0] }, // D
-            Vertex { position: [x - size, y + size, z - size], color: [0.0, 1.0, 1.0] }, // F
-            Vertex { position: [x - size, y - size, z - size], color: [0.0, 1.0, 1.0] }, // E
-        ];
-        let right_vertices = [
-            Vertex { position: [x + size, y - size, z + size], color: [0.0, 1.0, 1.0] }, // B
-            Vertex { position: [x + size, y + size, z + size], color: [0.0, 1.0, 1.0] }, // C
-            Vertex { position: [x + size, y + size, z - size], color: [0.0, 1.0, 1.0] }, // G
-            Vertex { position: [x + size, y - size, z - size], color: [0.0, 1.0, 1.0] }, // H
-        ];
-        let mut vertices = [Vertex{position: [0.0, 0.0, 0.0], color: [0.0, 0.0, 0.0]}; 36];
-        let faces = [&front_vertices, &back_vertices, &top_vertices, &bottom_vertices, &left_vertices, &right_vertices];
-        let mut idx = 0;
-    for face_vertices in &faces {
-        vertices[idx] = face_vertices[0]; idx += 1;
-        vertices[idx] = face_vertices[1]; idx += 1;
-        vertices[idx] = face_vertices[2]; idx += 1;
 
-        vertices[idx] = face_vertices[2]; idx += 1;
-        vertices[idx] = face_vertices[3]; idx += 1;
-        vertices[idx] = face_vertices[0]; idx += 1;
+            [x - half_size, y + half_size, z + half_size],
+            [x + half_size, y + half_size, z + half_size],
+            [x - half_size, y + half_size, z - half_size],
+            [x - half_size, y + half_size, z - half_size],
+            [x + half_size, y + half_size, z + half_size],
+            [x + half_size, y + half_size, z - half_size],
+            // bottom (0, -1, 0)
+            [x - half_size, y - half_size, z - half_size],
+            [x + half_size, y - half_size, z - half_size],
+            [x - half_size, y - half_size, z + half_size],
+            [x - half_size, y - half_size, z + half_size],
+            [x + half_size, y - half_size, z - half_size],
+            [x + half_size, y - half_size, z + half_size],
+        ].to_vec()
     }
-        vertices
+    fn cube_colors(&self) -> Vec<[i8; 3]> {
+        [
+            // front - blue
+            [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1],
+    
+            // right - red
+            [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0], [1, 0, 0],
+    
+            // back - yellow           
+            [1, 1, 0], [1, 1, 0], [1, 1, 0], [1, 1, 0], [1, 1, 0], [1, 1, 0],
+    
+            // left - aqua
+            [0, 1, 1], [0, 1, 1], [0, 1, 1], [0, 1, 1], [0, 1, 1], [0, 1, 1],
+    
+            // top - green
+            [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0],
+    
+            // bottom - fuchsia
+            [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1], [1, 0, 1],
+        ].to_vec()
+    }
+    fn vertex(&self, p: [f32; 3], c: [i8; 3]) -> Vertex {
+        Vertex {
+            position: [p[0] as f32, p[1] as f32, p[2] as f32],
+            color: [c[0] as f32, c[1] as f32, c[2] as f32],
+        }
+    }
+    fn create_vertices(&self) -> Vec<Vertex> {
+        let pos = self.cube_positions();
+        let col = self.cube_colors();
+        let mut data:Vec<Vertex> = Vec::with_capacity(pos.len());
+        for i in 0..pos.len() {
+            data.push(self.vertex(pos[i], col[i]));
+        }
+        data.to_vec()
     }
 }
+
 //indices enable to reuse data of vertex (triangles that use the same vertices for example)
 const INDICES: &[u16] = &[
     0, 1, 4,
@@ -435,11 +588,13 @@ impl State {
             },
             multiview: None, // 5.
         });
-        let cube = Cube::new([0.0, 0.0, 0.0], 1.0);
+        let cube = Cube::new([0.0, 5.0, 0.0], 1.0);
+        let floor = Floor::new(10.0);
+        let concatenated_vertices = [floor.create_vertices(), cube.create_vertices()].concat();
         let vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&cube.vertices()),
+                contents: bytemuck::cast_slice(&concatenated_vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
@@ -528,8 +683,9 @@ impl State {
             // NEW!
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            //render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            render_pass.draw(0..{36+36}, 0..1);
         }
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
