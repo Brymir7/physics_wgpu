@@ -7,8 +7,8 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 const GRAVITY: f32 = 9.81;
-
-
+use cgmath::{Rotation3, Zero};
+use cgmath::InnerSpace;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
@@ -36,30 +36,29 @@ impl Vertex {
     }
 }
 struct PhysicalState {
-    pub position: [f32; 3],
-    pub rotation: [f32; 3],
+    pub position: cgmath::Vector3<f32>,
+    pub rotation: cgmath::Quaternion<f32>,
     pub scale: f32,
     pub velocity: [f32; 3],
 }
 impl PhysicalState {
-    fn new(position: [f32; 3]) -> PhysicalState {
+    fn new(position: cgmath::Vector3<f32>) -> PhysicalState {
+        let rotation = if position.is_zero() {
+            // this is needed so an object at (0, 0, 0) won't get scaled to zero
+            // as Quaternions can effect scale if they're not created correctly
+            cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+        } else {
+            cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(25.0))
+        };
         PhysicalState {
             position,
-            rotation: [0.0; 3],
+            rotation,
             scale: 1.0,
             velocity: [0.0; 3],
         }
     }
     fn create_transformation_matrix(&self) -> cgmath::Matrix4<f32> {
-        let position_matrix =
-            cgmath::Matrix4::from_translation(cgmath::Vector3::from(self.position));
-        //let rotation_matrix =
-        //cgmath::Matrix4::from_euler_angles(self.rotation[0], self.rotation[1], self.rotation[2]);
-        //let scale_matrix = cgmath::Matrix4::from_scale(self.scale);
-
-        let transformation_matrix = position_matrix;
-
-        transformation_matrix.into()
+        (cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation))
     }
 }
 struct Floor {
@@ -192,7 +191,7 @@ impl Cube {
         Self {
             position,
             size,
-            physical_state: PhysicalState::new(position),
+            physical_state: PhysicalState::new(position.into()),
         }
     }
     fn cube_positions(&self) -> Vec<[f32; 3]> {
@@ -375,6 +374,10 @@ impl CameraController {
                         self.is_right_pressed = is_pressed;
                         true
                     }
+                    VirtualKeyCode::F | VirtualKeyCode::Right => {
+                        self.is_right_pressed = is_pressed;
+                        true
+                    }
                     _ => false,
                 }
             }
@@ -471,8 +474,38 @@ impl TransformUniform {
         }
     }
 
-    fn update_transform_matrix(&mut self, cube: &Cube) {
+    fn update_transform_matrix(&mut self, cube: &Cube) -> [[f32; 4]; 4] {
         self.transform_matrix = cube.physical_state.create_transformation_matrix().into();
+        self.transform_matrix
+    }
+    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                // attribute for the transformation matrix
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 7,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 8,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        }
     }
 }
 struct State {
@@ -635,7 +668,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",     // 1.
-                buffers: &[Vertex::desc()], // 2.
+                buffers: &[Vertex::desc(), TransformUniform::desc()], // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
@@ -669,16 +702,25 @@ impl State {
             multiview: None, // 5.
         });
         let mut objects: Vec<Cube> = Vec::new();
-        let cube = Cube::new([0.0, 10.0, 0.0], 1.0);
+        let cube = Cube::new([0.0, 10.0, 0.0], 3.0);
+        let cube1 = Cube::new([7.0, 10.0, 0.0], 3.0);
+        let cube2 = Cube::new([15.0, 10.0, 0.0], 3.0);
+        let cube3 = Cube::new([30.0, 10.0, 0.0], 3.0);
+
         objects.push(cube);
+        objects.push(cube1);
+        objects.push(cube2);
+        objects.push(cube3);
 
         let floor = Floor::new(10.0);
 
-        let concatenated_vertices =
-            [floor.create_vertices(), objects[0].create_vertices()].concat();
+        //let concatenated_vertices = objects.iter().fold(Vec::new(), |mut acc, cube| {
+        //    acc.extend_from_slice(&cube.create_vertices());
+        //    acc
+        //});
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&concatenated_vertices),
+            contents: bytemuck::cast_slice(&objects[0].create_vertices()),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -689,11 +731,15 @@ impl State {
 
         let mut transform_uniform = TransformUniform::new();
         transform_uniform.update_transform_matrix(&objects[0]);
-
+        let transform_uniform_matrices: Vec<TransformUniform> = objects.iter().map(|obj| {
+            let mut transform = TransformUniform::new();
+            transform.update_transform_matrix(obj);
+            transform
+        }).collect();
         let transform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Transform Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[transform_uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            contents: bytemuck::cast_slice(&transform_uniform_matrices),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::VERTEX |  wgpu::BufferUsages::COPY_DST,
         });
         // Create the bind group
         let transform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -750,11 +796,16 @@ impl State {
     fn update(&mut self, dt: std::time::Duration) {
         // physic logic
         //self.objects[0].update(dt);
-        self.objects[0].update(dt);
+        for cube in &mut self.objects {
+            cube.update(dt);
+        }
         print!("{}", self.objects[0].physical_state.position[1]);
         println!("new object");
-        self.transform_uniform
-            .update_transform_matrix(&self.objects[0]);
+        let transform_uniforms: Vec<TransformUniform> = self.objects.iter().map(|obj| {
+            let mut transform = TransformUniform::new();
+            transform.update_transform_matrix(obj);
+            transform
+        }).collect();
         // camera
         for i in 0..4 {
             for j in 0..4 {
@@ -775,7 +826,7 @@ impl State {
         self.queue.write_buffer(
             &self.transform_buffer,
             0,
-            bytemuck::cast_slice(&[self.transform_uniform]),
+            bytemuck::cast_slice(&transform_uniforms),
         );
     }
 
@@ -814,9 +865,10 @@ impl State {
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &self.transform_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.transform_buffer.slice(..));
             //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             //render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
-            render_pass.draw(0..{ 36 + 36 }, 0..1);
+            render_pass.draw(0..36, 0..self.objects.len() as u32);
         }
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
