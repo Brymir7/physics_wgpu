@@ -7,6 +7,8 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 const GRAVITY: f32 = 9.81;
+const TARGET_FPS: u64 = 120;
+const TARGET_FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / TARGET_FPS);
 use cgmath::{Rotation3, Zero};
 use cgmath::InnerSpace;
 #[repr(C)]
@@ -330,20 +332,29 @@ impl World {
         }
     }
     fn update(&mut self, dt: std::time::Duration) {
-        let dt_as_secs = dt.as_secs_f32();
+        let dt_as_secs = dt.as_secs_f32() * 0.25;
         for object in &mut self.objects {
-            if object.physical_state.position[1] - object.size >= -self.half_size {
+            if object.physical_state.position[1] - object.size * 0.5 >= -self.half_size {
                 object.apply_gravity(dt_as_secs);
             }
             object.update(dt_as_secs);
-            if let Some(new_velocity) = Self::handle_borders(object, dt_as_secs) {
+            if let Some((new_velocity, offset)) = Self::handle_borders(object, self.half_size) {
                 object.physical_state.velocity[1] = new_velocity;
+                object.physical_state.position[1] += offset;
             }
         }
     }
-    fn handle_borders(object: &mut Cube, half_size: f32) -> Option<f32> {
-        if object.physical_state.position[1] + object.size * 0.5 <= -half_size {
-            return Some(-0.75*object.physical_state.velocity[1]);
+    
+    fn handle_borders(object: &Cube, half_size: f32) -> Option<(f32, f32)> {
+        let min_velocity_threshold = 0.1;
+        let position_offset = 0.001;
+        if object.physical_state.position[1] - object.size * 0.5 <= -half_size {
+            let new_velocity = -0.9 * object.physical_state.velocity[1];
+            if new_velocity.abs() > min_velocity_threshold {
+                return Some((new_velocity, position_offset));
+            } else {
+                return Some((0.0, position_offset));
+            }
         }
         None
     }
@@ -735,9 +746,9 @@ impl State {
         });
         
         let mut objects: Vec<Cube> = Vec::new();
-        let cube = Cube::new([0.0, 0.0, 0.0], 1.0);
+        let cube = Cube::new([0.0, 0.0, 0.0], 3.0);
         objects.push(cube);
-        let world = World::new(100.0, objects);
+        let world = World::new(20.0, objects);
         let floor = Floor::new(10.0);
 
         //let concatenated_vertices = objects.iter().fold(Vec::new(), |mut acc, cube| {
@@ -933,6 +944,9 @@ pub async fn run() {
                 let now = Instant::now();
                 let dt = now - last_render_time;
                 last_render_time = now;
+                if dt < TARGET_FRAME_DURATION {
+                    std::thread::sleep(TARGET_FRAME_DURATION - dt);
+                }
                 state.update(dt);
                 match state.render() {
                     Ok(_) => {}
