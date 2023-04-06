@@ -1,4 +1,4 @@
-use std::iter;
+use std::{iter, time::Duration};
 use std::time::Instant;
 use wgpu::util::DeviceExt;
 use winit::{
@@ -61,6 +61,8 @@ impl PhysicalState {
         (cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation))
     }
 }
+
+
 struct Floor {
     position: [f32; 3],
     size: f32,
@@ -296,7 +298,7 @@ impl Cube {
             color: [c[0] as f32, c[1] as f32, c[2] as f32],
         }
     }
-    fn create_vertices(&self) -> Vec<Vertex> {
+    fn create_vertices(&self) -> Vec<Vertex> { 
         let pos = self.cube_positions();
         let col = self.cube_colors();
         let mut data: Vec<Vertex> = Vec::with_capacity(pos.len());
@@ -305,17 +307,47 @@ impl Cube {
         }
         data.to_vec()
     }
-    fn update(&mut self, dt: std::time::Duration) {
-        self.physical_state.velocity[1] = 1.0;
-        if (self.physical_state.position[1] + self.size) >= 0.0 {
-            self.physical_state.velocity[1] += GRAVITY * dt.as_secs_f32();
-            self.physical_state.position[1] -= self.physical_state.velocity[1] * dt.as_secs_f32();
-        }
-        self.physical_state.position[0] += self.physical_state.velocity[0] * dt.as_secs_f32();
-        self.physical_state.position[2] += self.physical_state.velocity[2] * dt.as_secs_f32();
+    fn apply_gravity(&mut self, dt: f32) {
+        self.physical_state.velocity[1] -= GRAVITY * dt;
+    }
+    fn update(&mut self, dt: f32) {
+        self.physical_state.position[0] += self.physical_state.velocity[0] * dt;
+        self.physical_state.position[1] += self.physical_state.velocity[1] * dt;
+        self.physical_state.position[2] += self.physical_state.velocity[2] * dt;
     }
 }
-
+struct World {
+    size: f32,
+    half_size: f32,
+    objects: Vec<Cube>,
+}
+impl World {
+    fn new (size: f32, objects:Vec<Cube>) -> World {
+        World {
+            size,
+            half_size: size * 0.5,
+            objects: objects,
+        }
+    }
+    fn update(&mut self, dt: std::time::Duration) {
+        let dt_as_secs = dt.as_secs_f32();
+        for object in &mut self.objects {
+            if object.physical_state.position[1] - object.size >= -self.half_size {
+                object.apply_gravity(dt_as_secs);
+            }
+            object.update(dt_as_secs);
+            if let Some(new_velocity) = Self::handle_borders(object, dt_as_secs) {
+                object.physical_state.velocity[1] = new_velocity;
+            }
+        }
+    }
+    fn handle_borders(object: &mut Cube, half_size: f32) -> Option<f32> {
+        if object.physical_state.position[1] + object.size * 0.5 <= -half_size {
+            return Some(-0.75*object.physical_state.velocity[1]);
+        }
+        None
+    }
+}
 //indices enable to reuse data of vertex (triangles that use the same vertices for example)
 const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
@@ -524,8 +556,8 @@ struct State {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    world: World,
     floor: Floor,
-    objects: Vec<Cube>,
     transform_uniform: TransformUniform, //used to make matrix into valid type -> uniform it
     transform_buffer: wgpu::Buffer,
     transform_bind_group: wgpu::BindGroup,
@@ -701,17 +733,11 @@ impl State {
             },
             multiview: None, // 5.
         });
+        
         let mut objects: Vec<Cube> = Vec::new();
-        let cube = Cube::new([0.0, 10.0, 0.0], 3.0);
-        let cube1 = Cube::new([7.0, 10.0, 0.0], 3.0);
-        let cube2 = Cube::new([15.0, 10.0, 0.0], 3.0);
-        let cube3 = Cube::new([30.0, 10.0, 0.0], 3.0);
-
+        let cube = Cube::new([0.0, 0.0, 0.0], 1.0);
         objects.push(cube);
-        objects.push(cube1);
-        objects.push(cube2);
-        objects.push(cube3);
-
+        let world = World::new(100.0, objects);
         let floor = Floor::new(10.0);
 
         //let concatenated_vertices = objects.iter().fold(Vec::new(), |mut acc, cube| {
@@ -720,7 +746,7 @@ impl State {
         //});
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&objects[0].create_vertices()),
+            contents: bytemuck::cast_slice(&world.objects[0].create_vertices()),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -730,8 +756,8 @@ impl State {
         });
 
         let mut transform_uniform = TransformUniform::new();
-        transform_uniform.update_transform_matrix(&objects[0]);
-        let transform_uniform_matrices: Vec<TransformUniform> = objects.iter().map(|obj| {
+        transform_uniform.update_transform_matrix(&world.objects[0]);
+        let transform_uniform_matrices: Vec<TransformUniform> = world.objects.iter().map(|obj| {
             let mut transform = TransformUniform::new();
             transform.update_transform_matrix(obj);
             transform
@@ -767,8 +793,8 @@ impl State {
             vertex_buffer,
             index_buffer,
             num_indices,
+            world,
             floor,
-            objects,
             transform_uniform,
             transform_buffer,
             transform_bind_group,
@@ -796,24 +822,13 @@ impl State {
     fn update(&mut self, dt: std::time::Duration) {
         // physic logic
         //self.objects[0].update(dt);
-        for cube in &mut self.objects {
-            cube.update(dt);
-        }
-        print!("{}", self.objects[0].physical_state.position[1]);
-        println!("new object");
-        let transform_uniforms: Vec<TransformUniform> = self.objects.iter().map(|obj| {
+        self.world.update(dt);
+        let transform_uniforms: Vec<TransformUniform> = self.world.objects.iter().map(|obj| {
             let mut transform = TransformUniform::new();
             transform.update_transform_matrix(obj);
             transform
         }).collect();
         // camera
-        for i in 0..4 {
-            for j in 0..4 {
-                print!("{}, ", self.transform_uniform.transform_matrix[i][j]);
-            }
-            println!();
-        }
-        println!("new matrix");
 
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
@@ -868,7 +883,7 @@ impl State {
             render_pass.set_vertex_buffer(1, self.transform_buffer.slice(..));
             //render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             //render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
-            render_pass.draw(0..36, 0..self.objects.len() as u32);
+            render_pass.draw(0..36, 0..self.world.objects.len() as u32);
         }
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
