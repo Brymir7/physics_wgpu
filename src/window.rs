@@ -332,7 +332,7 @@ impl World {
         }
     }
     fn update(&mut self, dt: std::time::Duration) {
-        let dt_as_secs = dt.as_secs_f32() * 0.25;
+        let dt_as_secs = dt.as_secs_f32();
         for object in &mut self.objects {
             if object.physical_state.position[1] - object.size * 0.5 >= -self.half_size {
                 object.apply_gravity(dt_as_secs);
@@ -348,8 +348,8 @@ impl World {
     fn handle_borders(object: &Cube, half_size: f32) -> Option<(f32, f32)> {
         let min_velocity_threshold = 0.1;
         let position_offset = 0.001;
-        if object.physical_state.position[1] - object.size * 0.5 <= -half_size {
-            let new_velocity = -0.9 * object.physical_state.velocity[1];
+        if object.physical_state.position[1] - object.size * 0.5 <= -half_size  && object.physical_state.velocity[1] < 0.0{
+            let new_velocity = -0.75 * object.physical_state.velocity[1];
             if new_velocity.abs() > min_velocity_threshold {
                 return Some((new_velocity, position_offset));
             } else {
@@ -746,9 +746,9 @@ impl State {
         });
         
         let mut objects: Vec<Cube> = Vec::new();
-        let cube = Cube::new([0.0, 0.0, 0.0], 3.0);
+        let cube = Cube::new([0.0, 5.0, 0.0], 1.0);
         objects.push(cube);
-        let world = World::new(20.0, objects);
+        let world = World::new(10.0, objects);
         let floor = Floor::new(10.0);
 
         //let concatenated_vertices = objects.iter().fold(Vec::new(), |mut acc, cube| {
