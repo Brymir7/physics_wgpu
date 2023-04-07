@@ -1,6 +1,7 @@
 use std::{iter, time::Duration};
 use std::time::Instant;
 use wgpu::util::DeviceExt;
+
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -11,6 +12,8 @@ const TARGET_FPS: u64 = 120;
 const TARGET_FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / TARGET_FPS);
 use cgmath::{Rotation3, Zero};
 use cgmath::InnerSpace;
+#[path = "camera.rs"]
+mod camera;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
@@ -362,129 +365,12 @@ impl World {
 //indices enable to reuse data of vertex (triangles that use the same vertices for example)
 const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
-#[rustfmt::skip]
-pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.0,
-    0.0, 0.0, 0.5, 1.0,
-);
-struct CameraController {
-    speed: f32,
-    is_forward_pressed: bool,
-    is_backward_pressed: bool,
-    is_left_pressed: bool,
-    is_right_pressed: bool,
-}
 
-impl CameraController {
-    fn new(speed: f32) -> Self {
-        Self {
-            speed,
-            is_forward_pressed: false,
-            is_backward_pressed: false,
-            is_left_pressed: false,
-            is_right_pressed: false,
-        }
-    }
-
-    fn process_events(&mut self, event: &WindowEvent) -> bool {
-        match event {
-            WindowEvent::KeyboardInput {
-                input:
-                    KeyboardInput {
-                        state,
-                        virtual_keycode: Some(keycode),
-                        ..
-                    },
-                ..
-            } => {
-                let is_pressed = *state == ElementState::Pressed;
-                match keycode {
-                    VirtualKeyCode::W | VirtualKeyCode::Up => {
-                        self.is_forward_pressed = is_pressed;
-                        true
-                    }
-                    VirtualKeyCode::A | VirtualKeyCode::Left => {
-                        self.is_left_pressed = is_pressed;
-                        true
-                    }
-                    VirtualKeyCode::S | VirtualKeyCode::Down => {
-                        self.is_backward_pressed = is_pressed;
-                        true
-                    }
-                    VirtualKeyCode::D | VirtualKeyCode::Right => {
-                        self.is_right_pressed = is_pressed;
-                        true
-                    }
-                    VirtualKeyCode::F | VirtualKeyCode::Right => {
-                        self.is_right_pressed = is_pressed;
-                        true
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
-    fn update_camera(&self, camera: &mut Camera) {
-        use cgmath::InnerSpace;
-        let forward = camera.target - camera.eye;
-        let forward_norm = forward.normalize();
-        let forward_mag = forward.magnitude();
-
-        // Prevents glitching when camera gets too close to the
-        // center of the scene.
-        if self.is_forward_pressed && forward_mag > self.speed {
-            camera.eye += forward_norm * self.speed;
-        }
-        if self.is_backward_pressed {
-            camera.eye -= forward_norm * self.speed;
-        }
-
-        let right = forward_norm.cross(camera.up);
-
-        // Redo radius calc in case the fowrard/backward is pressed.
-        let forward = camera.target - camera.eye;
-        let forward_mag = forward.magnitude();
-
-        if self.is_right_pressed {
-            // Rescale the distance between the target and eye so
-            // that it doesn't change. The eye therefore still
-            // lies on the circle made by the target and eye.
-            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
-        }
-        if self.is_left_pressed {
-            camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
-        }
-    }
-}
-
-struct Camera {
-    eye: cgmath::Point3<f32>,
-    target: cgmath::Point3<f32>,
-    up: cgmath::Vector3<f32>,
-    aspect: f32,
-    fovy: f32,
-    znear: f32,
-    zfar: f32,
-}
-impl Camera {
-    fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
-        // 1.
-        let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
-        // 2.
-        let proj = cgmath::perspective(cgmath::Deg(self.fovy), self.aspect, self.znear, self.zfar);
-
-        // 3.
-        return OPENGL_TO_WGPU_MATRIX * proj * view;
-    }
-}
 #[repr(C)]
 // This is so we can store this in a buffer
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
+    view_position: [f32; 4],
     // We can't use cgmath with bytemuck directly so we'll have
     // to convert the Matrix4 into a 4x4 f32 array
     view_proj: [[f32; 4]; 4],
@@ -494,12 +380,14 @@ impl CameraUniform {
     fn new() -> Self {
         use cgmath::SquareMatrix;
         Self {
+            view_position: [0.0; 4],
             view_proj: cgmath::Matrix4::identity().into(),
         }
     }
 
-    fn update_view_proj(&mut self, camera: &Camera) {
-        self.view_proj = camera.build_view_projection_matrix().into();
+    fn update_view_proj(&mut self, camera: &camera::Camera, projection: &camera::Projection) {
+        self.view_position = camera.position.to_homogeneous().into();
+        self.view_proj = (projection.calc_matrix() * camera.calc_matrix()).into();
     }
 }
 #[repr(C)]
@@ -558,10 +446,11 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     window: Window,
-    camera: Camera,
+    camera: camera::Camera,
+    projection: camera::Projection,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
-    camera_controller: CameraController,
+    camera_controller: camera::CameraController,
     camera_bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -572,6 +461,7 @@ struct State {
     transform_uniform: TransformUniform, //used to make matrix into valid type -> uniform it
     transform_buffer: wgpu::Buffer,
     transform_bind_group: wgpu::BindGroup,
+    mouse_pressed: bool,
 }
 
 impl State {
@@ -640,18 +530,11 @@ impl State {
             view_formats: vec![],
         };
         surface.configure(&device, &config);
-        let camera = Camera {
-            eye: (0.0, 1.0, 2.0).into(),
-            target: (0.0, 0.0, 0.0).into(),
-            up: cgmath::Vector3::unit_y(),
-            aspect: config.width as f32 / config.height as f32,
-            fovy: 45.0,
-            znear: 0.1,
-            zfar: 100.0,
-        };
-
+        let camera = camera::Camera::new((0.0, 5.0, 0.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));
+        let projection = camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 100.0);
+        let camera_controller = camera::CameraController::new(4.0, 0.4);
         let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
+        camera_uniform.update_view_proj(&camera, &projection);
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
@@ -695,7 +578,6 @@ impl State {
                 label: Some("transform_bind_group_layout"),
             });
 
-        let camera_controller = CameraController::new(0.05);
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let render_pipeline_layout =
@@ -747,7 +629,18 @@ impl State {
         
         let mut objects: Vec<Cube> = Vec::new();
         let cube = Cube::new([0.0, 0.0, 0.0], 3.0);
+        let cube1 = Cube::new([5.0, 0.0, 0.0], 3.0);
+        let cube2 = Cube::new([15.0, 0.0, 0.0], 3.0);
+        let cube3 = Cube::new([0.0, 0.0, 15.0], 3.0);
+        let cube4 = Cube::new([0.0, 15.0, 0.0], 3.0);
+        let cube5 = Cube::new([12.0, 0.0, 0.0], 3.0);
+
         objects.push(cube);
+        objects.push(cube1);
+        objects.push(cube2);
+        objects.push(cube3);
+        objects.push(cube4);
+        objects.push(cube5);
         let world = World::new(20.0, objects);
         let floor = Floor::new(10.0);
 
@@ -796,6 +689,7 @@ impl State {
             size,
             window,
             camera,
+            projection,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
@@ -809,6 +703,7 @@ impl State {
             transform_uniform,
             transform_buffer,
             transform_bind_group,
+            mouse_pressed: false,
         }
     }
 
@@ -823,17 +718,41 @@ impl State {
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
         }
+        self.projection.resize(new_size.width, new_size.height);
     }
 
     #[allow(unused_variables)]
     fn input(&mut self, event: &WindowEvent) -> bool {
-        self.camera_controller.process_events(event)
+        match event {
+            WindowEvent::KeyboardInput {
+                input:
+                    KeyboardInput {
+                        virtual_keycode: Some(key),
+                        state,
+                        ..
+                    },
+                ..
+            } => self.camera_controller.process_keyboard(*key, *state),
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.camera_controller.process_scroll(delta);
+                true
+            }
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                state,
+                ..
+            } => {
+                self.mouse_pressed = *state == ElementState::Pressed;
+                true
+            }
+            _ => false,
+        }
     }
 
     fn update(&mut self, dt: std::time::Duration) {
         // physic logic
         //self.objects[0].update(dt);
-        self.world.update(dt);
+        //self.world.update(dt);
         let transform_uniforms: Vec<TransformUniform> = self.world.objects.iter().map(|obj| {
             let mut transform = TransformUniform::new();
             transform.update_transform_matrix(obj);
@@ -841,8 +760,8 @@ impl State {
         }).collect();
         // camera
 
-        self.camera_controller.update_camera(&mut self.camera);
-        self.camera_uniform.update_view_proj(&self.camera);
+        self.camera_controller.update_camera(&mut self.camera, dt);
+        self.camera_uniform.update_view_proj(&self.camera, &self.projection);
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
@@ -905,65 +824,64 @@ impl State {
 
 pub async fn run() {
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let title = "PHYSICS WGPU";
+    let window = WindowBuilder::new().with_title(title).build(&event_loop).unwrap();
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = State::new(window).await;
     let mut last_render_time = Instant::now();
     event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Poll;
         match event {
+            Event::MainEventsCleared => state.window().request_redraw(),
+            // NEW!
+            Event::DeviceEvent {
+                event: DeviceEvent::MouseMotion{ delta, },
+                .. // We're not using device_id currently
+            } => if state.mouse_pressed {
+                state.camera_controller.process_mouse(delta.0, delta.1)
+            }
+            // UPDATED!
             Event::WindowEvent {
                 ref event,
                 window_id,
-            } if window_id == state.window().id() => {
-                if !state.input(event) {
-                    // UPDATED!
-                    match event {
-                        WindowEvent::CloseRequested
-                        | WindowEvent::KeyboardInput {
-                            input:
-                                KeyboardInput {
-                                    state: ElementState::Pressed,
-                                    virtual_keycode: Some(VirtualKeyCode::Escape),
-                                    ..
-                                },
-                            ..
-                        } => *control_flow = ControlFlow::Exit,
-                        WindowEvent::Resized(physical_size) => {
-                            state.resize(*physical_size);
-                        }
-                        WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                            // new_inner_size is &&mut so w have to dereference it twice
-                            state.resize(**new_inner_size);
-                        }
-                        _ => {}
+            } if window_id == state.window().id() && !state.input(event) => {
+                match event {
+                    #[cfg(not(target_arch="wasm32"))]
+                    WindowEvent::CloseRequested
+                    | WindowEvent::KeyboardInput {
+                        input:
+                            KeyboardInput {
+                                state: ElementState::Pressed,
+                                virtual_keycode: Some(VirtualKeyCode::Escape),
+                                ..
+                            },
+                        ..
+                    } => *control_flow = ControlFlow::Exit,
+                    WindowEvent::Resized(physical_size) => {
+                        state.resize(*physical_size);
                     }
+                    WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                        state.resize(**new_inner_size);
+                    }
+                    _ => {}
                 }
             }
+            // UPDATED!
             Event::RedrawRequested(window_id) if window_id == state.window().id() => {
                 let now = Instant::now();
                 let dt = now - last_render_time;
                 last_render_time = now;
-                if dt < TARGET_FRAME_DURATION {
-                    std::thread::sleep(TARGET_FRAME_DURATION - dt);
-                }
                 state.update(dt);
                 match state.render() {
                     Ok(_) => {}
                     // Reconfigure the surface if it's lost or outdated
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        state.resize(state.size)
-                    }
+                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => state.resize(state.size),
                     // The system is out of memory, we should probably quit
                     Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-
+                    // We're ignoring timeouts
                     Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
                 }
-            }
-            Event::RedrawEventsCleared => {
-                // RedrawRequested will only trigger once, unless we manually
-                // request it.
-                state.window().request_redraw();
             }
             _ => {}
         }
