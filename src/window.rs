@@ -312,6 +312,13 @@ impl Cube {
     fn apply_gravity(&mut self, dt: f32) {
         self.physical_state.velocity[1] -= GRAVITY * dt;
     }
+    fn check_collision(&mut self, object: &Cube) -> bool {
+        let sum_half_lengths = (self.size+ object.size) / 2.0;
+        let abs_distance = (self.physical_state.position[0] - object.physical_state.position[0]).abs()
+        + (self.physical_state.position[1] - object.physical_state.position[1]).abs()
+        + (self.physical_state.position[2] - object.physical_state.position[2]).abs();
+        return abs_distance < sum_half_lengths
+    }
     fn update(&mut self, dt: f32) {
         self.physical_state.position[0] += self.physical_state.velocity[0] * dt;
         self.physical_state.position[1] += self.physical_state.velocity[1] * dt;
@@ -337,6 +344,11 @@ impl World {
             if object.physical_state.position[1] - object.size * 0.5 >= -self.half_size {
                 object.apply_gravity(dt_as_secs);
             }
+            //for object_second in &mut self.objects {
+            //    if object.check_collision(&object_second) {
+            //        println!("COLLISION");
+            //    }
+            //}
             object.update(dt_as_secs);
             if let Some((new_velocity, offset)) = Self::handle_borders(object, self.half_size) {
                 object.physical_state.velocity[1] = new_velocity;
@@ -569,9 +581,10 @@ struct State {
     num_indices: u32,
     world: World,
     floor: Floor,
-    transform_uniform: TransformUniform, //used to make matrix into valid type -> uniform it
+    transform_uniform: Vec<TransformUniform>, //used to make matrix into valid type -> uniform it
     transform_buffer: wgpu::Buffer,
     transform_bind_group: wgpu::BindGroup,
+    transform_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl State {
@@ -641,7 +654,7 @@ impl State {
         };
         surface.configure(&device, &config);
         let camera = Camera {
-            eye: (0.0, 1.0, 2.0).into(),
+            eye: (0.0, 5.0, 20.0).into(),
             target: (0.0, 0.0, 0.0).into(),
             up: cgmath::Vector3::unit_y(),
             aspect: config.width as f32 / config.height as f32,
@@ -747,7 +760,9 @@ impl State {
         
         let mut objects: Vec<Cube> = Vec::new();
         let cube = Cube::new([0.0, 5.0, 0.0], 1.0);
+        let cube1 = Cube::new([0.0, 10.0, 2.0], 1.0);
         objects.push(cube);
+        objects.push(cube1);
         let world = World::new(10.0, objects);
         let floor = Floor::new(10.0);
 
@@ -766,16 +781,14 @@ impl State {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        let mut transform_uniform = TransformUniform::new();
-        transform_uniform.update_transform_matrix(&world.objects[0]);
-        let transform_uniform_matrices: Vec<TransformUniform> = world.objects.iter().map(|obj| {
+        let transform_uniform: Vec<TransformUniform> = world.objects.iter().map(|obj| {
             let mut transform = TransformUniform::new();
             transform.update_transform_matrix(obj);
             transform
         }).collect();
         let transform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Transform Uniform Buffer"),
-            contents: bytemuck::cast_slice(&transform_uniform_matrices),
+            contents: bytemuck::cast_slice(&transform_uniform),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::VERTEX |  wgpu::BufferUsages::COPY_DST,
         });
         // Create the bind group
@@ -809,6 +822,7 @@ impl State {
             transform_uniform,
             transform_buffer,
             transform_bind_group,
+            transform_bind_group_layout,
         }
     }
 
@@ -827,20 +841,30 @@ impl State {
 
     #[allow(unused_variables)]
     fn input(&mut self, event: &WindowEvent) -> bool {
-        self.camera_controller.process_events(event)
+        self.camera_controller.process_events(event);
+        match event {
+            WindowEvent::KeyboardInput {
+                input,
+                ..
+            } => {
+                let pressed = input.state == ElementState::Pressed;
+                if let Some(VirtualKeyCode::C) = input.virtual_keycode {
+                    if pressed {
+                        self.world.objects.push(Cube::new([0.0, 5.0, 0.0], 1.0));
+                        print!("pressed");
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        false
     }
-
     fn update(&mut self, dt: std::time::Duration) {
         // physic logic
         //self.objects[0].update(dt);
         self.world.update(dt);
-        let transform_uniforms: Vec<TransformUniform> = self.world.objects.iter().map(|obj| {
-            let mut transform = TransformUniform::new();
-            transform.update_transform_matrix(obj);
-            transform
-        }).collect();
-        // camera
-
+        self.update_new_transform_uniform();
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
         self.queue.write_buffer(
@@ -852,10 +876,32 @@ impl State {
         self.queue.write_buffer(
             &self.transform_buffer,
             0,
-            bytemuck::cast_slice(&transform_uniforms),
+            bytemuck::cast_slice(&self.transform_uniform),
         );
     }
-
+    //this creates a new buffer to accomodate new cubes
+    fn update_new_transform_uniform(&mut self) {
+        self.transform_uniform = self.world.objects.iter().map(|obj| {
+            let mut transform = TransformUniform::new();
+            transform.update_transform_matrix(obj);
+            transform
+        }).collect();
+        // camera
+        self.transform_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Transform Uniform Buffer"),
+            contents: bytemuck::cast_slice(&self.transform_uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::VERTEX |  wgpu::BufferUsages::COPY_DST,
+        });
+        // Create the bind group
+        self.transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.transform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 1,
+                resource: self.transform_buffer.as_entire_binding(),
+            }],
+            label: Some("transform_bind_group"),
+        });
+    }
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
