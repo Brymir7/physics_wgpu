@@ -1,6 +1,7 @@
 use std::{iter, time::Duration};
 use std::time::Instant;
 use wgpu::util::DeviceExt;
+use rand::{Rng};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -369,6 +370,19 @@ impl World {
             }
         }
         None
+    }
+    fn create_random_cube(&mut self) {
+        let mut rng = rand::thread_rng();
+        let offset_from_borders: f32 = 3.0;
+        let min_range = -self.half_size + offset_from_borders;
+        let max_range = self.half_size - offset_from_borders;
+        let position: [f32; 3] = [
+            rng.gen_range(min_range..max_range),
+            rng.gen_range(min_range..max_range),
+            rng.gen_range(min_range..max_range),
+        ];
+        let size = rng.gen_range(1.0..=3.0);
+        self.objects.push(Cube::new(position, size));
     }
 }
 //indices enable to reuse data of vertex (triangles that use the same vertices for example)
@@ -850,8 +864,7 @@ impl State {
                 let pressed = input.state == ElementState::Pressed;
                 if let Some(VirtualKeyCode::C) = input.virtual_keycode {
                     if pressed {
-                        self.world.objects.push(Cube::new([0.0, 5.0, 0.0], 1.0));
-                        print!("pressed");
+                        self.world.create_random_cube();
                         return true;
                     }
                 }
